@@ -1,7 +1,13 @@
 {
   "name": "rexy-linus",
   "version": "0.1.0",
-  "description": "Local Claude Code and Codex activity collector for the Rexy dashboard.",
+  "description": "Stream Claude Code and Codex session history, tool calls, and live activity to the Rexy dashboard.",
+  "homepage": "https://rexy.baememory.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Itaxh1/linus.git"
+  },
+  "keywords": ["rexy", "claude-code", "codex", "coding-agents", "cli", "activity-tracker"],
   "license": "UNLICENSED",
   "private": false,
   "type": "module",
