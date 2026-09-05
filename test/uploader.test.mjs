@@ -46,6 +46,13 @@ test('503 retries back off and preserve the exact batch across restart', async (
   assert.equal(get().delivery(), null);
 }));
 
+test('revoked credentials are fatal but retain the queue and retry receipt', async () => withQueue(async get => {
+  globalThis.fetch = async () => new Response('', { status: 401 });
+  await assert.rejects(flushOutbox(get(), credentials), error => error.fatal === true && /Queued data is kept/.test(error.message));
+  assert.equal(get().count(), 2);
+  assert.ok(get().delivery());
+}));
+
 test('partial receipts acknowledge only identified successes and retain rejected data', async () => withQueue(async get => {
   globalThis.fetch = async (_url, init) => Response.json({
     batch_id: JSON.parse(init.body).batch_id, accepted: 1, duplicate: 0, rejected: 1,

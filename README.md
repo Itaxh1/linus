@@ -52,3 +52,16 @@ files and the existing raw transcripts are additional disk usage. Updating
 Linus preserves the queue and connection: stop the old process with Ctrl+C,
 then run `npx --yes rexy-linus@latest` without a new claim token. Run only one
 collector against the same data directory.
+
+### 0.1.2
+
+The terminal now shows cumulative uploaded events, not a counter that resets each
+cycle. Use `--verbose` for bytes read, files found, extracted records and pending
+uploads. These are progress counts, not a claim that full history has finished.
+
+Re-pasting a claim for the same API resumes the saved account without redeeming
+the claim again. Revoked or expired upload credentials stop with an actionable
+error; queued data is kept. To connect a different account or replace a revoked
+device, set `LINUS_DATA_DIR` to a new empty directory and paste a fresh command
+from Rexy. The new connection imports the recognized history into that account;
+the old directory remains untouched. A failed claim never silently switches APIs.

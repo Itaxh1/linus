@@ -47,6 +47,15 @@ export async function flushOutbox(
       redirect: "error",
     });
     permanent = response.status === 400 || response.status === 422;
+    if (response.status === 401 || response.status === 403) {
+      // Backoff cannot fix a revoked or expired device token (they last 90 days),
+      // so retrying forever would just hide the real problem behind a spinner.
+      const fatal = new Error(
+        "this device is no longer authorised — reconnect it from the Devices page in Rexy. Queued data is kept.",
+      );
+      (fatal as Error & { fatal?: boolean }).fatal = true;
+      throw fatal;
+    }
     if (!response.ok) throw new Error(`upload failed with HTTP ${response.status}; queued data is retained and will retry with backoff`);
     const receipt = await response.json() as IngestReceipt;
     const expected = JSON.parse(delivery.body) as { batch_id: string };

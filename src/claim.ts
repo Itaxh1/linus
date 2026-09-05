@@ -10,6 +10,8 @@ export async function exchangeClaim(
   const response = await fetch(`${apiBase}/v1/devices/exchange-claim`, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    signal: AbortSignal.timeout(15_000),
+    redirect: "error",
     body: JSON.stringify({
       claim_token: claimToken,
       device_name: hostname(),
@@ -17,7 +19,7 @@ export async function exchangeClaim(
     }),
   });
   if (!response.ok) {
-    throw new Error(`claim exchange failed with HTTP ${response.status}`);
+    throw new Error(`claim exchange failed with HTTP ${response.status}. Generate a fresh install command in Rexy; claims expire after ten minutes and can only be used once.`);
   }
   const result = await response.json() as { device_id: string; device_token: string };
   return saveCredentials(

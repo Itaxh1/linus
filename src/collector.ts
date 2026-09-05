@@ -27,6 +27,7 @@ async function attemptFlush(
     await flushOutbox(outbox, credentials);
     return null;
   } catch (error) {
+    if (error instanceof Error && (error as Error & { fatal?: boolean }).fatal) throw error;
     return error instanceof Error ? error.message : String(error);
   }
 }
