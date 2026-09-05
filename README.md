@@ -32,3 +32,23 @@ events and bounded, redacted content previews are uploaded to Rexy; redaction
 cannot guarantee removal of every secret. Original raw files remain local.
 Connection credentials, checkpoints, and queued uploads live in `~/.linus`.
 No transcript collection or account connection runs during npm installation.
+
+### Import and retry behavior
+
+Linus scans in bounded cycles, rotating through files so a large recent session
+does not block older history. Each cycle makes at most one upload request, with
+up to 500 events and a 4 MiB request limit. Progress includes bytes read, events
+uploaded, and the remaining queue. `--once` runs one cycle, not a full import.
+
+Failed requests use persistent exponential backoff with jitter (up to five
+minutes). Restarting preserves checkpoints and the exact in-flight batch for
+safe retries. Identified rejected records are retained separately so accepted
+records can drain; ambiguous receipts never delete queued data.
+
+Scanning pauses under upload backpressure or when the local SQLite budget is
+nearly full, then resumes as uploads free space. The default database budget is
+256 MiB; `LINUS_MAX_QUEUE_MB` can override it (minimum 8 MiB). SQLite journal
+files and the existing raw transcripts are additional disk usage. Updating
+Linus preserves the queue and connection: stop the old process with Ctrl+C,
+then run `npx --yes rexy-linus@latest` without a new claim token. Run only one
+collector against the same data directory.

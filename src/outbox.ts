@@ -15,17 +15,29 @@ export interface ResolvedSourceFile extends Checkpoint {
 
 export interface PendingRecord {
   id: number;
+  attempts: number;
   payload: Record<string, unknown>;
+}
+
+export interface Delivery {
+  ids: number[];
+  body: string;
+  attempts: number;
+  availableAt: number;
 }
 
 export class Outbox {
   readonly database: DatabaseSync;
 
   constructor(path: string) {
+    const configuredMb = Number(process.env.LINUS_MAX_QUEUE_MB || 256);
+    if (!Number.isFinite(configuredMb) || configuredMb < 8) throw new Error("LINUS_MAX_QUEUE_MB must be at least 8");
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    this.database = new DatabaseSync(path, { timeout: 5_000 });
+    this.database = new DatabaseSync(path);
     this.database.exec(`
+      PRAGMA busy_timeout = 5000;
       PRAGMA journal_mode = WAL;
+      PRAGMA synchronous = FULL;
       PRAGMA foreign_keys = ON;
       CREATE TABLE IF NOT EXISTS source_files (
         source_file_id TEXT PRIMARY KEY,
@@ -56,7 +68,95 @@ export class Outbox {
         next_batch_sequence INTEGER NOT NULL
       ) STRICT;
       INSERT OR IGNORE INTO device_state(singleton, next_batch_sequence) VALUES (1, 1);
+      CREATE TABLE IF NOT EXISTS delivery (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        ids TEXT NOT NULL, body TEXT NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        available_at INTEGER NOT NULL DEFAULT 0
+      ) STRICT;
+      CREATE TABLE IF NOT EXISTS collector_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        last_source_identity TEXT NOT NULL
+      ) STRICT;
     `);
+    const columns = this.database.prepare("PRAGMA table_info(outbox)").all();
+    if (!columns.some(column => column.name === "quarantined")) {
+      this.database.exec("ALTER TABLE outbox ADD COLUMN quarantined INTEGER NOT NULL DEFAULT 0");
+    }
+    const pageSize = Number(this.database.prepare("PRAGMA page_size").get()!.page_size);
+    this.database.exec(`PRAGMA max_page_count = ${Math.floor(configuredMb * 1024 * 1024 / pageSize)}`);
+  }
+
+  canCollect(): boolean {
+    const pages = Number(this.database.prepare("PRAGMA page_count").get()!.page_count);
+    const free = Number(this.database.prepare("PRAGMA freelist_count").get()!.freelist_count);
+    const maximum = Number(this.database.prepare("PRAGMA max_page_count").get()!.max_page_count);
+    const pageSize = Number(this.database.prepare("PRAGMA page_size").get()!.page_size);
+    // Reserve space for one bounded record, the in-flight batch, and indexes.
+    return (maximum - pages + free) * pageSize > 6 * 1024 * 1024;
+  }
+
+  delivery(): Delivery | null {
+    const row = this.database.prepare("SELECT ids, body, attempts, available_at FROM delivery WHERE singleton = 1").get();
+    return row ? { ids: JSON.parse(String(row.ids)), body: String(row.body), attempts: Number(row.attempts), availableAt: Number(row.available_at) } : null;
+  }
+
+  saveDelivery(ids: number[], body: string, attempts = 0): Delivery {
+    this.database.prepare("INSERT INTO delivery(singleton, ids, body, attempts) VALUES (1, ?, ?, ?)").run(JSON.stringify(ids), body, attempts);
+    return { ids, body, attempts, availableAt: 0 };
+  }
+
+  deferDelivery(delivery: Delivery, permanent = false): void {
+    const delay = Math.min(300_000, 2_000 * 2 ** Math.min(delivery.attempts, 8));
+    const availableAt = Date.now() + Math.min(300_000, Math.round(delay * (0.75 + Math.random() * 0.5)));
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of delivery.ids) {
+        this.database.prepare("UPDATE outbox SET attempts = attempts + 1, available_at = ? WHERE id = ?")
+          .run(new Date(availableAt).toISOString(), id);
+      }
+      if (permanent) {
+        // A schema-rejected batch wasn't committed. Try individual records next;
+        // only confirmed single-record failures can be quarantined.
+        if (delivery.ids.length === 1) {
+          this.database.prepare("UPDATE outbox SET quarantined = 1 WHERE id = ? AND attempts >= 5").run(delivery.ids[0]!);
+        }
+        this.database.exec("DELETE FROM delivery");
+      } else {
+        this.database.prepare("UPDATE delivery SET attempts = attempts + 1, available_at = ? WHERE singleton = 1").run(availableAt);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+
+  finishDelivery(ids: number[], rejected: number[] = []): void {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const id of ids) this.database.prepare("DELETE FROM outbox WHERE id = ?").run(id);
+      for (const id of rejected) this.database.prepare("UPDATE outbox SET quarantined = 1 WHERE id = ?").run(id);
+      this.database.exec("DELETE FROM delivery");
+      this.database.exec("COMMIT");
+    } catch (error) { this.database.exec("ROLLBACK"); throw error; }
+  }
+
+  quarantined(): number {
+    return Number(this.database.prepare("SELECT count(*) AS n FROM outbox WHERE quarantined = 1").get()!.n);
+  }
+
+  activeCount(): number {
+    return Number(this.database.prepare("SELECT count(*) AS n FROM outbox WHERE quarantined = 0").get()!.n);
+  }
+
+  lastScannedFile(): string | null {
+    const row = this.database.prepare("SELECT last_source_identity FROM collector_state WHERE singleton = 1").get();
+    return row ? String(row.last_source_identity) : null;
+  }
+
+  markScannedFile(identityId: string): void {
+    this.database.prepare(`
+      INSERT INTO collector_state(singleton, last_source_identity) VALUES (1, ?)
+      ON CONFLICT(singleton) DO UPDATE SET last_source_identity = excluded.last_source_identity
+    `).run(identityId);
   }
 
   checkpoint(sourceFileId: string): Checkpoint {
@@ -186,12 +286,12 @@ export class Outbox {
 
   pending(limit = 500): PendingRecord[] {
     const rows = this.database.prepare(`
-      SELECT id, payload FROM outbox
-      WHERE available_at <= ?
+      SELECT id, payload, attempts FROM outbox
+      WHERE available_at <= ? AND quarantined = 0
       ORDER BY id
       LIMIT ?
-    `).all(new Date().toISOString(), limit) as Array<{ id: number; payload: string }>;
-    return rows.map((row) => ({ id: row.id, payload: JSON.parse(row.payload) }));
+    `).all(new Date().toISOString(), limit) as Array<{ id: number; payload: string; attempts: number }>;
+    return rows.map((row) => ({ id: row.id, attempts: row.attempts, payload: JSON.parse(row.payload) }));
   }
 
   acknowledge(ids: number[]): void {

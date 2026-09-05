@@ -3,7 +3,7 @@ import { exchangeClaim } from "./claim.js";
 import { collectOnce } from "./collector.js";
 import { defaultDataDirectory, loadCredentials } from "./config.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 
 interface Arguments {
   api?: string;
@@ -67,16 +67,20 @@ async function main(): Promise<void> {
     console.log(`Connected device ${credentials.deviceId}`);
   }
   if (!credentials) throw new Error("Linus is not connected; paste the command from Rexy");
+  console.log("Scanning local history. Upload progress follows; keep this terminal open.");
 
   do {
     const result = await collectOnce(credentials, dataDirectory);
     console.log(
       `Scanned ${result.files} files, ${result.records} new records, ` +
-      `${result.events} timeline events, ${result.pending} pending uploads`,
+      `${result.events} timeline events, ${result.pending} pending uploads ` +
+      `(${(result.bytes / 1024 / 1024).toFixed(1)} MiB read, ${result.uploaded} uploaded)`,
     );
     if (result.uploadError) console.error(`Upload deferred: ${result.uploadError}`);
+    if (result.quarantined) console.error(`${result.quarantined} rejected records retained locally for inspection; other uploads continue.`);
+    if (result.collectionPaused) console.error("Local queue limit reached; scanning paused while uploads drain. No history was deleted.");
     if (args.once) break;
-    if (result.records === 0 || result.uploadError) {
+    if ((result.records === 0 && result.uploaded === 0) || result.uploadError) {
       await new Promise((resolve) => setTimeout(resolve, 5_000));
     } else {
       await new Promise((resolve) => setImmediate(resolve));

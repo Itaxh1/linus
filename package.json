@@ -1,6 +1,6 @@
 {
   "name": "rexy-linus",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stream Claude Code and Codex session history, tool calls, and live activity to the Rexy dashboard.",
   "homepage": "https://rexy.baememory.com",
   "repository": {
