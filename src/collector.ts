@@ -63,7 +63,7 @@ async function scanFile(
         revision: 1,
         stage: "enriched",
         payload_hash: record.hash,
-        event,
+        event: file.nativeSessionId ? { ...event, native_session_id: file.nativeSessionId } : event,
       },
     }));
     if (extracted.length > 0) lastTimestamp = extracted[0]!.event.created_at;
