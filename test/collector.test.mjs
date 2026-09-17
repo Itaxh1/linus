@@ -77,3 +77,26 @@ test('a failed upload retains data and does not retry once per file or on restar
   assert.equal(restarted.pending, 3);
   assert.equal(requests, 1);
 }));
+
+test('native Codex identity is transmitted on every event, including resumed appends', async () => withFixture(async ({ directory, data }) => {
+  const root=join(directory,'.codex','sessions'); await mkdir(root,{recursive:true});
+  const path=join(root,'session.jsonl');
+  const id='0194e18c-4042-7000-8123-123456789abc';
+  const meta=JSON.stringify({timestamp:'2026-09-16T12:00:00Z',type:'session_meta',payload:{id}})+'\n';
+  const prompt=JSON.stringify({timestamp:'2026-09-16T12:01:00Z',type:'response_item',payload:{type:'message',role:'user',content:[{type:'input_text',text:'Fix caching'}]}})+'\n';
+  await writeFile(path,meta+prompt);
+  const uploaded=[];
+  globalThis.fetch=async (_url,init) => {
+    const batch=JSON.parse(init.body); uploaded.push(...batch.records);
+    return Response.json({batch_id:batch.batch_id,accepted:batch.records.length,duplicate:0,rejected:0});
+  };
+  await collectOnce(credentials,data,directory);
+  assert.ok(uploaded.length>=2);
+  assert.ok(uploaded.every(r=>r.event.native_session_id===id));
+  uploaded.length=0;
+  await writeFile(path,meta+prompt+prompt);
+  await collectOnce(credentials,data,directory);
+  assert.equal(uploaded.length,1);
+  assert.equal(uploaded[0].event.native_session_id,id);
+  assert.equal(uploaded[0].sequence,2);
+}));
