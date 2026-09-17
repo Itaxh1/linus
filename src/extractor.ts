@@ -151,7 +151,7 @@ function claudeEvents(
     } else if (block?.type === "tool_use") {
       result.push({ itemIndex: index, event: {
         ...base, type: "tool", tool_name: String(block.name || "unknown"),
-        tool_status: "unknown", source_call_id: String(block.id || `${sourceFileId}:${record.startOffset}:${index}`),
+        tool_status: "unknown", source_call_id: block.id ? String(block.id) : null,
         tool_input_preview: preview(block.input, 8_000),
       } });
     } else if (block?.type === "tool_result") {
@@ -239,7 +239,7 @@ function codexEvents(parsed: Json, sourceFileId: string, record: RecordSlice): E
     return [{ itemIndex: 0, event: {
       ...base, type: "tool", tool_name: String(payload.name || (payload.type === "web_search_call" ? "WebSearch" : "unknown")),
       tool_status: payload.status === "in_progress" ? "running" : "unknown",
-      source_call_id: String(payload.call_id || `${sourceFileId}:${record.startOffset}`),
+      source_call_id: payload.call_id ? String(payload.call_id) : null,
       tool_input_preview: preview(payload.arguments ?? payload.input ?? payload.action, 8_000),
     } }];
   }
